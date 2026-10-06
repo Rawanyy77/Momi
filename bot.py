@@ -8,8 +8,8 @@ import random
 # ------------------------------------------------------------------
 # CONFIGURATION - OPTIMIZED FOR BGMI
 # ------------------------------------------------------------------
-BOT_TOKEN = "7994298191:AAEbmsKBZtHLvQ5wLu_5GtmJY6P5DWJvG7A"   # Apna Token
-CHAT_ID   = "2138312113"              # Apna Chat ID
+BOT_TOKEN = "8817277726:AAFH9xmCfWcMOAgQceKee2qJvdCUUcw4v88"   # Apna Token
+CHAT_ID   = "8971948454"                          # Apna Chat ID
 
 # SETTINGS
 NUM_THREADS = 1500                     # 75+ ports wale error se bachne ke liye thode kam rakhein
