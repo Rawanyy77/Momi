@@ -8,7 +8,7 @@ import random
 # ------------------------------------------------------------------
 # CONFIGURATION
 # ------------------------------------------------------------------
-BOT_TOKEN = "8629855258:AAG8rGtNF_BTkVBM9cHZuvaA308jykiI6aI"   # Apna Token
+BOT_TOKEN = "7994298191:AAEbmsKBZtHLvQ5wLu_5GtmJY6P5DWJvG7A"   # Apna Token
 CHAT_ID    = "2138312113"              # Apna Chat ID
 
 # Default Settings (Agar Telegram se na mile toh ye use honge)
